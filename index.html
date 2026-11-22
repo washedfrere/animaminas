@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0d1b24">
+  <meta name="description" content="Buscaminas hexagonal: limpia el panel sin pisar las bombas.">
+  <title>Animaminas</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/iconos/icon-192.png" sizes="192x192">
+  <link rel="apple-touch-icon" href="assets/iconos/apple-touch-icon.png">
+  <link rel="stylesheet" href="css/estilos.css">
+</head>
+<body>
+  <div id="app" class="app">
+
+    <!-- Pantalla de inicio -->
+    <section id="pantalla-inicio" class="pantalla pantalla--inicio">
+      <header class="inicio__cabecera">
+        <h1 class="inicio__titulo">Animaminas</h1>
+        <p class="inicio__lema">Un toque cambia la marca (! / ?), dos toques destapan. Señala todas las bombas.</p>
+      </header>
+
+      <div class="inicio__acciones">
+        <button id="btn-sonido" class="boton-sonido" type="button" aria-pressed="true"
+                aria-label="Desactivar la música">
+          <img id="icono-sonido" src="assets/iconos/with_sound.webp" alt="" width="48" height="48">
+        </button>
+      </div>
+
+      <div id="lista-niveles" class="niveles" aria-label="Elige un nivel"></div>
+
+      <footer class="inicio__pie">
+        <button id="btn-ranking" class="boton boton--fantasma" type="button">Ranking</button>
+        <button id="btn-ayuda" class="boton boton--fantasma" type="button">Cómo se juega</button>
+      </footer>
+    </section>
+
+    <!-- Pantalla de juego -->
+    <section id="pantalla-juego" class="pantalla pantalla--juego" hidden>
+      <header class="hud">
+        <button id="btn-volver" class="hud__boton" type="button" aria-label="Volver al inicio">←</button>
+        <div class="hud__datos">
+          <span id="hud-nivel" class="hud__nivel">Nivel 1</span>
+          <span id="hud-vidas" class="hud__vidas" aria-live="polite"></span>
+        </div>
+        <div class="hud__marcadores">
+          <span class="marcador"><span id="hud-minas">0</span><small>minas</small></span>
+          <span class="marcador" id="marcador-tiempo" hidden><span id="hud-tiempo">0:00</span><small>tiempo</small></span>
+        </div>
+        <div class="hud__acciones">
+          <button id="btn-nuevo" class="hud__boton" type="button" aria-label="Nuevo tablero" title="Nuevo tablero">⟳</button>
+          <button id="btn-repetir" class="hud__boton" type="button" aria-label="Repetir tablero" title="Repetir tablero">⟲</button>
+        </div>
+      </header>
+
+      <div id="lienzo-caja" class="lienzo-caja">
+        <canvas id="lienzo" aria-label="Tablero de juego"></canvas>
+      </div>
+
+      <p id="pista" class="pista" role="status">Un toque marca: ! → ? → nada · doble toque destapa · doble toque sobre ! lo quita</p>
+    </section>
+
+    <!-- Ranking -->
+    <section id="pantalla-ranking" class="pantalla pantalla--ranking" hidden>
+      <header class="seccion__cabecera">
+        <button id="btn-ranking-volver" class="hud__boton" type="button" aria-label="Volver">←</button>
+        <h2>Ranking</h2>
+      </header>
+      <div id="ranking-contenido" class="ranking__contenido"></div>
+      <button id="btn-borrar-ranking" class="boton boton--peligro" type="button">Borrar ranking</button>
+    </section>
+  </div>
+
+  <!-- Panel superpuesto (victoria, derrota, ayuda) -->
+  <div id="panel" class="panel" hidden>
+    <div class="panel__caja" role="dialog" aria-modal="true" aria-labelledby="panel-titulo">
+      <h2 id="panel-titulo" class="panel__titulo"></h2>
+      <div id="panel-cuerpo" class="panel__cuerpo"></div>
+      <div id="panel-acciones" class="panel__acciones"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
