@@ -5,6 +5,10 @@
  * independientes que se colocan centradas en cada celda. Todo se dibuja con una
  * transformación de vista (escala + desplazamiento) para que quepa en cualquier
  * pantalla y se pueda ampliar.
+ *
+ * Rendimiento: el tablero se pre-renderiza en un canvas fuera de pantalla a la escala
+ * actual (fondo + fichas, ya escaladas). Cada frame es un único blit alineado a píxel;
+ * al destapar o marcar una casilla solo se repinta esa casilla en la capa.
  */
 
 import { RUTAS, FICHAS } from "./config.js";
@@ -20,6 +24,9 @@ const NOMBRES_FICHAS = ["limpio", "marca", "seguro", "mina", "numero1", "numero2
  */
 const ESCALA_FICHA = 1.0;
 
+/** Por encima de esta superficie (px de dispositivo) no se cachea la capa del tablero. */
+const LIMITE_CAPA = 8_000_000;
+
 function cargarImagen(url) {
   return new Promise((resolver, rechazar) => {
     const img = new Image();
@@ -33,6 +40,7 @@ export function crearRender(lienzo, caja, opciones = {}) {
   const ctx = lienzo.getContext("2d");
   const fichas = new Map();
   const fondos = new Map();
+  const cacheFichas = new Map();
   const vista = { escala: 1, x: 0, y: 0 };
   const estado = { anchoCss: 1, altoCss: 1, dpr: 1 };
   let nivelActual = null;
@@ -41,6 +49,14 @@ export function crearRender(lienzo, caja, opciones = {}) {
   let cuadroPedido = 0;
   let contadorDibujos = 0;
   const alCambiarVista = opciones.alCambiarVista ?? null;
+
+  // capa pre-renderizada del tablero
+  let capa = null;
+  let capaEscala = 0;
+  let capaDpr = 0;
+  let capaNivel = null;
+  let capaPartida = null;
+  let firmas = null;
 
   /** Pide un repintado para el siguiente frame (como mucho uno por frame). */
   function pedirDibujo() {
@@ -66,7 +82,7 @@ export function crearRender(lienzo, caja, opciones = {}) {
 
     estado.anchoCss = Math.max(1, Math.round(r.width));
     estado.altoCss = Math.max(1, Math.round(r.height));
-    estado.dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    estado.dpr = Math.min(window.devicePixelRatio || 1, 2);
     lienzo.width = Math.round(estado.anchoCss * estado.dpr);
     lienzo.height = Math.round(estado.altoCss * estado.dpr);
     ajustar();
@@ -114,14 +130,158 @@ export function crearRender(lienzo, caja, opciones = {}) {
     nivelActual = nivel;
     if (!fondos.has(nivel.id)) {
       fondos.set(nivel.id, await cargarImagen(RUTAS.fondo(nivel.id)));
+      // memoria: como mucho dos fondos descodificados a la vez
+      while (fondos.size > 2) {
+        const primera = fondos.keys().next().value;
+        if (primera === nivel.id) break;
+        fondos.delete(primera);
+      }
     }
     fondoActual = fondos.get(nivel.id);
+    capa = null;
+    cacheFichas.clear();
     ajustar();
+  }
+
+  /* --------------------------------------------------------------- capa/fichas */
+
+  /** Ficha preescalada al tamaño de celda actual (se cachea por tamaño). */
+  function fichaEscalada(nombre, ancho, alto) {
+    const claveCache = `${nombre}|${ancho}x${alto}`;
+    if (cacheFichas.has(claveCache)) return cacheFichas.get(claveCache);
+    const original = fichas.get(nombre);
+    if (!original) return null;
+    const lienzoFicha = document.createElement("canvas");
+    lienzoFicha.width = ancho;
+    lienzoFicha.height = alto;
+    const c = lienzoFicha.getContext("2d");
+    c.imageSmoothingQuality = "high";
+    c.drawImage(original, 0, 0, ancho, alto);
+    cacheFichas.set(claveCache, lienzoFicha);
+    return lienzoFicha;
+  }
+
+  const firmaCelda = (c) => c.estado * 4 + c.marca;
+
+  function nombreFicha(c) {
+    if (c.estado === ESTADO.DESTAPADA) return c.num > 0 ? FICHAS.numero(c.num) : FICHAS.limpio;
+    if (c.estado === ESTADO.MINA) return FICHAS.mina;
+    if (c.marca === MARCAS.DUDA) return FICHAS.duda;
+    if (c.marca === MARCAS.SEGURO) return FICHAS.seguro;
+    return null;
+  }
+
+  /**
+   * Pinta una celda (ficha) en la capa, en píxeles de dispositivo. En la reconstrucción
+   * completa el fondo ya está puesto y no hace falta limpiar; en una actualización suelta
+   * sí hay que reponer el parche de fondo para borrar la ficha anterior.
+   */
+  function pintarCelda(ctxCapa, celda, dpr, conFondo) {
+    const hexa = nivelActual.hexagono;
+    const escala = capaEscala;
+    const X = Math.round((celda.x - hexa.ancho / 2) * escala * dpr);
+    const Y = Math.round((celda.y - hexa.alto / 2) * escala * dpr);
+    const W = Math.round(hexa.ancho * escala * dpr);
+    const H = Math.round(hexa.alto * escala * dpr);
+
+    if (conFondo) {
+      ctxCapa.clearRect(X, Y, W, H);
+      ctxCapa.drawImage(fondoActual,
+        celda.x - hexa.ancho / 2, celda.y - hexa.alto / 2, hexa.ancho, hexa.alto,
+        X, Y, W, H);
+    }
+
+    const nombre = nombreFicha(celda);
+    if (!nombre) return;
+    const ficha = fichaEscalada(nombre, W, H);
+    if (ficha) ctxCapa.drawImage(ficha, X, Y);
+  }
+
+  function reconstruirCapa(partida) {
+    const dpr = estado.dpr;
+    const w = Math.round(nivelActual.caja.ancho * vista.escala * dpr);
+    const h = Math.round(nivelActual.caja.alto * vista.escala * dpr);
+
+    if (w * h > LIMITE_CAPA) {
+      capa = null;
+      capaPartida = partida;
+      capaEscala = vista.escala;
+      capaDpr = dpr;
+      capaNivel = nivelActual;
+      return;
+    }
+
+    const necesitabaTamano = !capa || capa.width !== w || capa.height !== h;
+    if (!capa) capa = document.createElement("canvas");
+    if (necesitabaTamano) {
+      capa.width = w;
+      capa.height = h;
+      firmas = null;
+    }
+    const ctxCapa = capa.getContext("2d");
+    ctxCapa.imageSmoothingQuality = "high";
+    ctxCapa.clearRect(0, 0, w, h);
+    ctxCapa.drawImage(fondoActual, 0, 0, fondoActual.width, fondoActual.height, 0, 0, w, h);
+
+    capaEscala = vista.escala;
+    capaDpr = dpr;
+    capaNivel = nivelActual;
+    capaPartida = partida;
+    firmas = new Array(partida.celdas.length);
+
+    for (let i = 0; i < partida.celdas.length; i += 1) {
+      const c = partida.celdas[i];
+      pintarCelda(ctxCapa, c, dpr, false);
+      firmas[i] = firmaCelda(c);
+    }
+  }
+
+  /** Repinta solo las casillas cuyo estado o marca ha cambiado. */
+  function actualizarCeldas(partida) {
+    if (!firmas || firmas.length !== partida.celdas.length) {
+      reconstruirCapa(partida);
+      return;
+    }
+    const ctxCapa = capa.getContext("2d");
+    let cambios = 0;
+    for (let i = 0; i < partida.celdas.length; i += 1) {
+      const c = partida.celdas[i];
+      const firma = firmaCelda(c);
+      if (firma === firmas[i]) continue;
+      pintarCelda(ctxCapa, c, capaDpr, true);
+      firmas[i] = firma;
+      cambios += 1;
+    }
+    return cambios;
+  }
+
+  function dibujarDirecto(partida) {
+    const { escala, x: ox, y: oy } = vista;
+    const hexa = nivelActual.hexagono;
+    ctx.drawImage(fondoActual, ox, oy,
+      nivelActual.caja.ancho * escala, nivelActual.caja.alto * escala);
+
+    const anchoFicha = hexa.ancho * escala * ESCALA_FICHA;
+    const altoFicha = hexa.alto * escala * ESCALA_FICHA;
+    const margen = Math.max(anchoFicha, altoFicha);
+    for (const c of partida.celdas) {
+      const sx = ox + c.x * escala;
+      const sy = oy + c.y * escala;
+      if (sx < -margen || sy < -margen || sx > estado.anchoCss + margen || sy > estado.altoCss + margen) {
+        continue;
+      }
+      const nombre = nombreFicha(c);
+      if (!nombre) continue;
+      const img = fichas.get(nombre);
+      if (!img) continue;
+      ctx.drawImage(img, sx - anchoFicha / 2, sy - altoFicha / 2, anchoFicha, altoFicha);
+    }
   }
 
   function dibujar(partida, opciones = {}) {
     const { debug = false, resaltada = -1 } = opciones;
     contadorDibujos += 1;
+
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, lienzo.width, lienzo.height);
     ctx.setTransform(estado.dpr, 0, 0, estado.dpr, 0, 0);
@@ -129,45 +289,41 @@ export function crearRender(lienzo, caja, opciones = {}) {
     ctx.imageSmoothingQuality = "high";
 
     if (!nivelActual || !fondoActual) return;
+
+    const dpr = estado.dpr;
+    const escalaValida = capa && capaEscala === vista.escala && capaDpr === dpr
+      && capaNivel === nivelActual && capaPartida === partida;
+    if (!escalaValida) {
+      reconstruirCapa(partida);
+    } else {
+      actualizarCeldas(partida);
+    }
+
     const { escala, x: ox, y: oy } = vista;
-    ctx.drawImage(fondoActual, ox, oy,
-      nivelActual.caja.ancho * escala, nivelActual.caja.alto * escala);
-
-    const hexa = nivelActual.hexagono;
-    const anchoFicha = hexa.ancho * escala * ESCALA_FICHA;
-    const altoFicha = hexa.alto * escala * ESCALA_FICHA;
-    const margen = Math.max(anchoFicha, altoFicha);
-
-    for (const c of partida.celdas) {
-      const sx = ox + c.x * escala;
-      const sy = oy + c.y * escala;
-      if (sx < -margen || sy < -margen || sx > estado.anchoCss + margen || sy > estado.altoCss + margen) {
-        continue;
-      }
-      let nombre = null;
-      if (c.estado === ESTADO.DESTAPADA) nombre = c.num > 0 ? FICHAS.numero(c.num) : FICHAS.limpio;
-      else if (c.estado === ESTADO.MINA) nombre = FICHAS.mina;
-      else if (c.marca === MARCAS.DUDA) nombre = FICHAS.duda;
-      else if (c.marca === MARCAS.SEGURO) nombre = FICHAS.seguro;
-      if (!nombre) continue;
-      const img = fichas.get(nombre);
-      if (!img) continue;
-      ctx.drawImage(img, sx - anchoFicha / 2, sy - altoFicha / 2, anchoFicha, altoFicha);
+    if (capa) {
+      // blit 1:1 alineado a píxel de dispositivo (sin remuestreo)
+      const anchoCss = capa.width / dpr;
+      const altoCss = capa.height / dpr;
+      const dx = Math.round(ox * dpr) / dpr;
+      const dy = Math.round(oy * dpr) / dpr;
+      ctx.drawImage(capa, dx, dy, anchoCss, altoCss);
+    } else {
+      dibujarDirecto(partida);
     }
 
     if (resaltada >= 0 && partida.celdas[resaltada]) {
       const c = partida.celdas[resaltada];
       const cx = ox + c.x * escala;
       const cy = oy + c.y * escala;
-      const w2 = anchoFicha / 2;
-      const h2 = altoFicha / 2;
+      const w2 = nivelActual.hexagono.ancho * escala;
+      const h2 = nivelActual.hexagono.alto * escala;
       ctx.beginPath();
-      ctx.moveTo(cx + w2, cy);
-      ctx.lineTo(cx + w2 / 2, cy + h2);
-      ctx.lineTo(cx - w2 / 2, cy + h2);
-      ctx.lineTo(cx - w2, cy);
-      ctx.lineTo(cx - w2 / 2, cy - h2);
-      ctx.lineTo(cx + w2 / 2, cy - h2);
+      ctx.moveTo(cx + w2 / 2, cy);
+      ctx.lineTo(cx + w2 / 4, cy + h2 / 2);
+      ctx.lineTo(cx - w2 / 4, cy + h2 / 2);
+      ctx.lineTo(cx - w2 / 2, cy);
+      ctx.lineTo(cx - w2 / 4, cy - h2 / 2);
+      ctx.lineTo(cx + w2 / 4, cy - h2 / 2);
       ctx.closePath();
       ctx.strokeStyle = "rgba(242,183,5,0.95)";
       ctx.lineWidth = 3;
