@@ -14,9 +14,10 @@ export function conectarEntrada({ lienzo, render, obtenerPartida, alDestapar, al
   let punteros = new Map();
   let pendiente = null;        // {indice, temporizador}
   let pulsacion = null;        // {temporizador, indice, x, y, disparada}
-  let arrastre = null;         // {x, y, movido}
+  let arrastre = null;         // {x, y, inicioX, inicioY, movido}
   let pellizco = null;         // {distancia}
-  let seleccion = 0;
+  let gestoVista = false;      // el gesto actual movió la vista: no debe marcar
+  let seleccion = -1;
 
   const indiceEn = (clientX, clientY) => {
     const p = render.aImagen(clientX, clientY);
@@ -30,21 +31,41 @@ export function conectarEntrada({ lienzo, render, obtenerPartida, alDestapar, al
     }
   }
 
+  function cancelarPulsacion() {
+    if (pulsacion) {
+      clearTimeout(pulsacion.temporizador);
+      pulsacion = null;
+    }
+  }
+
+  /** Cualquier inicio de gesto de vista anula el toque pendiente. */
+  function empezarGestoVista() {
+    gestoVista = true;
+    cancelarPendiente();
+    cancelarPulsacion();
+  }
+
   function alPulsar(ev) {
     ev.preventDefault();
     lienzo.focus?.();
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
     punteros.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
     if (punteros.size === 2) {
-      cancelarPendiente();
-      if (pulsacion) { clearTimeout(pulsacion.temporizador); pulsacion = null; }
+      empezarGestoVista();
+      arrastre = null;
       const [a, b] = [...punteros.values()];
       pellizco = { distancia: Math.hypot(a.x - b.x, a.y - b.y) };
       return;
     }
     if (punteros.size > 2) return;
 
-    arrastre = { x: ev.clientX, y: ev.clientY, movido: false };
+    gestoVista = false;
+    arrastre = {
+      x: ev.clientX, y: ev.clientY,
+      inicioX: ev.clientX, inicioY: ev.clientY,
+      movido: false,
+    };
     const indice = indiceEn(ev.clientX, ev.clientY);
     pulsacion = {
       indice,
@@ -74,9 +95,15 @@ export function conectarEntrada({ lienzo, render, obtenerPartida, alDestapar, al
     if (!arrastre) return;
     const dx = ev.clientX - arrastre.x;
     const dy = ev.clientY - arrastre.y;
-    if (!arrastre.movido && Math.hypot(dx, dy) > CONFIG.umbralArrastre) {
-      arrastre.movido = true;
-      if (pulsacion) { clearTimeout(pulsacion.temporizador); pulsacion = null; }
+    const recorrido = Math.hypot(ev.clientX - arrastre.inicioX, ev.clientY - arrastre.inicioY);
+
+    if (!arrastre.movido) {
+      // un movimiento pequeño ya cancela la pulsación larga (dedo tembloroso)
+      if (recorrido > CONFIG.umbralPulsacion) cancelarPulsacion();
+      if (recorrido > CONFIG.umbralArrastre) {
+        arrastre.movido = true;
+        empezarGestoVista();
+      }
     }
     if (arrastre.movido) {
       render.desplazar(dx, dy);
@@ -88,18 +115,33 @@ export function conectarEntrada({ lienzo, render, obtenerPartida, alDestapar, al
   function alSoltar(ev) {
     const estaba = punteros.delete(ev.pointerId);
     if (!estaba) return;
+
+    const habiaPellizco = pellizco !== null;
     if (punteros.size < 2) pellizco = null;
 
     const fuePulsacionLarga = pulsacion?.disparada;
-    if (pulsacion) { clearTimeout(pulsacion.temporizador); pulsacion = null; }
+    cancelarPulsacion();
     const eraArrastre = arrastre?.movido;
+
+    // si queda un dedo tras el pellizco, se puede seguir arrastrando con él
+    if (habiaPellizco && punteros.size === 1) {
+      const [restante] = [...punteros.values()];
+      arrastre = {
+        x: restante.x, y: restante.y,
+        inicioX: restante.x, inicioY: restante.y,
+        movido: true,
+      };
+      return;
+    }
     arrastre = null;
-    if (fuePulsacionLarga || eraArrastre) return;
+
+    if (fuePulsacionLarga || eraArrastre || gestoVista) {
+      if (punteros.size === 0) gestoVista = false;
+      return;
+    }
 
     const indice = indiceEn(ev.clientX, ev.clientY);
     if (indice < 0) { cancelarPendiente(); return; }
-    seleccion = indice;
-    alCambiarSeleccion?.(indice);
 
     if (pendiente && pendiente.indice === indice) {
       clearTimeout(pendiente.temporizador);

@@ -51,7 +51,9 @@ async function iniciar() {
 
   const lienzo = UI.$("lienzo");
   const caja = UI.$("lienzo-caja");
-  render = crearRender(lienzo, caja);
+  render = crearRender(lienzo, caja, {
+    alCambiarVista: () => { if (estado.partida) dibujar(); },
+  });
   estado.render = render;
 
   conectarSonido();
@@ -195,7 +197,7 @@ async function empezarNivel(nivel, { minas = null, intentos = 1 } = {}) {
     alMarcar: intentarMarcar,
     alCambiarSeleccion: () => dibujar(),
   });
-  estado.entrada.fijarSeleccion(estado.partida.celdas[0]?.i ?? 0);
+  estado.entrada.fijarSeleccion(-1);
 
   actualizarHud();
   arrancarReloj();
@@ -443,6 +445,8 @@ window.animaminas = {
   marcar: (i) => intentarMarcar(i),
   dibujar,
   posicion: (i) => render.posicionCelda(estado.partida.celdas[i]),
+  vista: () => render.vistaActual(),
+  dibujos: () => render.dibujos(),
 };
 
 iniciar();

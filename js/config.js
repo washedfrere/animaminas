@@ -12,6 +12,8 @@ export const CONFIG = {
   pulsacionLarga: 450,
   /** px de movimiento que anulan un toque (para distinguirlo de un arrastre). */
   umbralArrastre: 9,
+  /** px de movimiento que ya cancelan la pulsación larga (dedo tembloroso). */
+  umbralPulsacion: 4,
 
   puntosBase: { 1: 300, 2: 600, 3: 1000, 4: 1500 },
   penalizacionIntento: 100,

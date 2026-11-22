@@ -29,7 +29,7 @@ function cargarImagen(url) {
   });
 }
 
-export function crearRender(lienzo, caja) {
+export function crearRender(lienzo, caja, opciones = {}) {
   const ctx = lienzo.getContext("2d");
   const fichas = new Map();
   const fondos = new Map();
@@ -38,6 +38,18 @@ export function crearRender(lienzo, caja) {
   let nivelActual = null;
   let fondoActual = null;
   let ajusteBase = 1;
+  let cuadroPedido = 0;
+  let contadorDibujos = 0;
+  const alCambiarVista = opciones.alCambiarVista ?? null;
+
+  /** Pide un repintado para el siguiente frame (como mucho uno por frame). */
+  function pedirDibujo() {
+    if (cuadroPedido) return;
+    cuadroPedido = requestAnimationFrame(() => {
+      cuadroPedido = 0;
+      alCambiarVista?.();
+    });
+  }
 
   function redimensionar() {
     const r = caja.getBoundingClientRect();
@@ -109,6 +121,7 @@ export function crearRender(lienzo, caja) {
 
   function dibujar(partida, opciones = {}) {
     const { debug = false, resaltada = -1 } = opciones;
+    contadorDibujos += 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, lienzo.width, lienzo.height);
     ctx.setTransform(estado.dpr, 0, 0, estado.dpr, 0, 0);
@@ -212,12 +225,17 @@ export function crearRender(lienzo, caja) {
     vista.x = px - ix * nueva;
     vista.y = py - iy * nueva;
     limitarVista();
+    pedirDibujo();
   }
 
   function desplazar(dx, dy) {
+    if (!dx && !dy) return;
+    const antesX = vista.x;
+    const antesY = vista.y;
     vista.x += dx;
     vista.y += dy;
     limitarVista();
+    if (vista.x !== antesX || vista.y !== antesY) pedirDibujo();
   }
 
   function vistaActual() {
@@ -238,5 +256,6 @@ export function crearRender(lienzo, caja) {
   return {
     cargarFichas, cargarNivel, dibujar, aImagen, zoomEn, desplazar,
     vistaActual, redimensionar, ajustar, reiniciarVista, posicionCelda,
+    pedirDibujo, dibujos: () => contadorDibujos,
   };
 }

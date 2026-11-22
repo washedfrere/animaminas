@@ -2,7 +2,7 @@
    Precachea el shell y los recursos de juego; cache-first para estáticos.
    La música se cachea la primera vez que se reproduce. */
 
-const VERSION = "animaminas-v3";
+const VERSION = "animaminas-v4";
 const CACHE = `${VERSION}`;
 
 const PRECARGA = [
