@@ -193,6 +193,7 @@ export function conectarEntrada({ lienzo, render, obtenerPartida, alDestapar, al
       default: return;
     }
     ev.preventDefault();
+    render.asegurarVisible(celdas[seleccion]);
     alCambiarSeleccion?.(seleccion);
   }
 

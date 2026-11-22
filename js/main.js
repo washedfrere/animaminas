@@ -138,10 +138,26 @@ function conectarBotones() {
   UI.$("btn-volver").addEventListener("click", () => irAInicio());
   UI.$("btn-nuevo").addEventListener("click", () => empezarNivel(estado.nivel, {}));
   UI.$("btn-repetir").addEventListener("click", () => repetirTablero());
+  UI.$("btn-encuadre").addEventListener("click", alternarEncuadre);
   UI.$("btn-ranking").addEventListener("click", abrirRanking);
   UI.$("btn-ranking-volver").addEventListener("click", () => irAInicio());
   UI.$("btn-ayuda").addEventListener("click", mostrarAyuda);
   UI.$("btn-borrar-ranking").addEventListener("click", confirmarBorrado);
+}
+
+/** Alterna entre ver todo el tablero y el tamaño de celda cómodo. */
+function alternarEncuadre() {
+  if (!estado.partida) return;
+  const v = render.vistaActual();
+  const enEncuadre = Math.abs(v.escala - v.ajusteBase) < 0.001;
+  if (enEncuadre) {
+    const ayuda = estado.partida.celdaAyuda !== null ? estado.partida.celdas[estado.partida.celdaAyuda] : null;
+    render.vistaComoda(ayuda);
+  } else {
+    render.encuadrarTodo();
+  }
+  dibujar();
+  vibrar(10);
 }
 
 function irAInicio() {
@@ -182,9 +198,11 @@ async function empezarNivel(nivel, { minas = null, intentos = 1 } = {}) {
   UI.$("marcador-tiempo").hidden = !nivel.cronometro;
 
   // el lienzo necesita un frame para tener tamaño
+  const partida = estado.partida;
   requestAnimationFrame(() => {
     render.redimensionar();
-    render.reiniciarVista();
+    const ayuda = partida.celdaAyuda !== null ? partida.celdas[partida.celdaAyuda] : null;
+    render.vistaComoda(ayuda);
     dibujar();
   });
 
@@ -447,6 +465,7 @@ window.animaminas = {
   posicion: (i) => render.posicionCelda(estado.partida.celdas[i]),
   vista: () => render.vistaActual(),
   dibujos: () => render.dibujos(),
+  medirReconstruccion: () => render.medirReconstruccion(estado.partida),
 };
 
 iniciar();

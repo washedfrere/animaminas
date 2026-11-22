@@ -325,6 +325,8 @@ button { font: inherit; color: inherit; }
   .niveles { grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr); width: 100%; }
   .hud { gap: 6px; padding: 0 6px; }
   .hud__marcadores { gap: 10px; }
+  .hud__boton { width: 34px; height: 34px; font-size: 0.95rem; }
+  .hud__acciones { gap: 4px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

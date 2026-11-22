@@ -82,6 +82,7 @@ export function crearPartida(nivel, opciones = {}) {
     finMs: null,
     minasTotales: nivel.minas,
     indicesMinas: [],
+    celdaAyuda: null,
     avisos: { bombasDeMas: false, todoDestapado: false },
   };
 
@@ -138,6 +139,7 @@ function ayudaInicial(partida, aleatorio) {
   }
   if (!candidatas.length) return;
   const elegida = candidatas[Math.floor(aleatorio() * candidatas.length)];
+  partida.celdaAyuda = elegida;
   destaparSeguro(partida, elegida);
 }
 
