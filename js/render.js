@@ -41,12 +41,31 @@ export function crearRender(lienzo, caja) {
 
   function redimensionar() {
     const r = caja.getBoundingClientRect();
+    const anterior = { ...estado };
+    // punto del tablero que está en el centro de la vista (para conservar el zoom)
+    let centro = null;
+    if (nivelActual && anterior.anchoCss > 1 && anterior.altoCss > 1) {
+      centro = {
+        x: (anterior.anchoCss / 2 - vista.x) / vista.escala,
+        y: (anterior.altoCss / 2 - vista.y) / vista.escala,
+        zoom: vista.escala / ajusteBase,
+      };
+    }
+
     estado.anchoCss = Math.max(1, Math.round(r.width));
     estado.altoCss = Math.max(1, Math.round(r.height));
     estado.dpr = Math.min(window.devicePixelRatio || 1, 2.5);
     lienzo.width = Math.round(estado.anchoCss * estado.dpr);
     lienzo.height = Math.round(estado.altoCss * estado.dpr);
     ajustar();
+
+    // si el jugador había ampliado, mantiene su zoom relativo y el encuadre
+    if (centro && centro.zoom > 1.001) {
+      vista.escala = ajusteBase * centro.zoom;
+      vista.x = estado.anchoCss / 2 - centro.x * vista.escala;
+      vista.y = estado.altoCss / 2 - centro.y * vista.escala;
+      limitarVista();
+    }
   }
 
   /** Encuadra el tablero completo dentro de la caja visible. */
@@ -158,13 +177,25 @@ export function crearRender(lienzo, caja) {
     }
   }
 
+  /**
+   * Factor real entre el búfer del canvas y su tamaño en CSS. Normalmente coincide con
+   * `devicePixelRatio`, pero si el contenedor cambia de tamaño entre dos mediciones el
+   * navegador estira el búfer: usar este factor evita que el toque se desplace.
+   */
+  function factorBuffer(rect) {
+    return {
+      x: lienzo.width / Math.max(1, rect.width),
+      y: lienzo.height / Math.max(1, rect.height),
+    };
+  }
+
   /** Convierte coordenadas de pantalla a coordenadas de la imagen del nivel. */
   function aImagen(clientX, clientY) {
     const r = lienzo.getBoundingClientRect();
-    return {
-      x: (clientX - r.left - vista.x) / vista.escala,
-      y: (clientY - r.top - vista.y) / vista.escala,
-    };
+    const f = factorBuffer(r);
+    const bx = ((clientX - r.left) * f.x) / estado.dpr;
+    const by = ((clientY - r.top) * f.y) / estado.dpr;
+    return { x: (bx - vista.x) / vista.escala, y: (by - vista.y) / vista.escala };
   }
 
   function zoomEn(factor, clientX, clientY) {
@@ -196,10 +227,10 @@ export function crearRender(lienzo, caja) {
   /** Coordenadas de pantalla (cliente) del centro de una celda. */
   function posicionCelda(celda) {
     const r = lienzo.getBoundingClientRect();
-    return {
-      x: r.left + vista.x + celda.x * vista.escala,
-      y: r.top + vista.y + celda.y * vista.escala,
-    };
+    const f = factorBuffer(r);
+    const bx = estado.dpr * (vista.x + celda.x * vista.escala);
+    const by = estado.dpr * (vista.y + celda.y * vista.escala);
+    return { x: r.left + bx / f.x, y: r.top + by / f.y };
   }
 
   function reiniciarVista() { ajustar(); }

@@ -234,15 +234,23 @@ button { font: inherit; color: inherit; }
 
 .pista {
   margin: 0;
-  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  height: 34px;
+  line-height: 34px;
+  padding: 0 12px calc(0px + env(safe-area-inset-bottom));
   font-size: 0.74rem;
   color: var(--texto-suave);
   text-align: center;
   background: #0b1a24;
   border-top: 1px solid #1c3444;
   flex: 0 0 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: color 0.2s ease, background 0.2s ease;
 }
+
+/* Ocultar sin cambiar el alto: la franja sigue ocupando su sitio. */
+.pista--oculta { visibility: hidden; }
 
 .pista--aviso {
   color: #ffe9a8;

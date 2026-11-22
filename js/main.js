@@ -26,7 +26,7 @@ const estado = {
 const audio = crearAudio();
 let render = null;
 
-const PISTA_INICIAL = "Un toque marca: ! → ? → nada · doble toque destapa · doble toque sobre ! lo quita";
+const PISTA_INICIAL = "Un toque: ! → ? → nada · doble toque destapa";
 
 function vibrar(ms) {
   try { navigator.vibrate?.(ms); } catch { /* sin soporte */ }
@@ -60,16 +60,25 @@ async function iniciar() {
   registrarServiceWorker();
 
   let pendiente = null;
-  window.addEventListener("resize", () => {
+  const reajustar = () => {
     clearTimeout(pendiente);
     pendiente = setTimeout(() => {
       render.redimensionar();
       if (estado.partida) dibujar();
     }, 120);
-  });
-  window.addEventListener("orientationchange", () => {
-    setTimeout(() => { render.redimensionar(); if (estado.partida) dibujar(); }, 200);
-  });
+  };
+  window.addEventListener("resize", reajustar);
+  window.addEventListener("orientationchange", reajustar);
+
+  // Cualquier cambio de tamaño de la caja (barra de direcciones, pista, rotación) tiene que
+  // rehacer el búfer del canvas; si no, el navegador lo estira y el toque se desplaza.
+  if ("ResizeObserver" in window) {
+    const observador = new ResizeObserver(() => {
+      render.redimensionar();
+      if (estado.partida) dibujar();
+    });
+    observador.observe(caja);
+  }
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) audio.pausar();
     else if (!UI.$("pantalla-juego").hidden) audio.reanudar();
@@ -164,9 +173,8 @@ async function empezarNivel(nivel, { minas = null, intentos = 1 } = {}) {
 
   estado.partida = crearPartida(nivel, { minas, intentos });
   estado.pistaVisible = true;
-  UI.$("pista").hidden = false;
   UI.$("pista").classList.remove("pista--aviso");
-  UI.$("pista").textContent = PISTA_INICIAL;
+  ponerPista(PISTA_INICIAL);
   clearTimeout(temporizadorAviso);
   UI.$("hud-nivel").textContent = TEXTO.nivel(nivel.id, nivel.nombre);
   UI.$("marcador-tiempo").hidden = !nivel.cronometro;
@@ -262,18 +270,26 @@ function tratarAvisos(avisos = []) {
 }
 
 let temporizadorAviso = null;
+
+/** Muestra un texto en la franja inferior sin cambiar el alto del lienzo. */
+function ponerPista(texto) {
+  const pista = UI.$("pista");
+  pista.textContent = texto;
+  pista.title = texto;
+  pista.classList.remove("pista--oculta");
+}
+
 function mostrarAviso(texto) {
   const pista = UI.$("pista");
-  pista.hidden = false;
-  pista.textContent = texto;
+  ponerPista(texto);
   pista.classList.add("pista--aviso");
   clearTimeout(temporizadorAviso);
   temporizadorAviso = setTimeout(() => {
     pista.classList.remove("pista--aviso");
     if (estado.pistaVisible) {
-      pista.textContent = PISTA_INICIAL;
+      ponerPista(PISTA_INICIAL);
     } else {
-      pista.hidden = true;
+      pista.classList.add("pista--oculta");
     }
   }, 5000);
 }
@@ -281,7 +297,8 @@ function mostrarAviso(texto) {
 function ocultarPista() {
   if (!estado.pistaVisible) return;
   estado.pistaVisible = false;
-  if (!UI.$("pista").classList.contains("pista--aviso")) UI.$("pista").hidden = true;
+  const pista = UI.$("pista");
+  if (!pista.classList.contains("pista--aviso")) pista.classList.add("pista--oculta");
 }
 
 function actualizarHud() {
