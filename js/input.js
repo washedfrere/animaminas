@@ -21,7 +21,8 @@ export function conectarEntrada({ lienzo, render, obtenerPartida, alDestapar, al
 
   const indiceEn = (clientX, clientY) => {
     const p = render.aImagen(clientX, clientY);
-    return celdaEnPunto(obtenerPartida().celdas, p.x, p.y, 34);
+    if (p.fuera) return -1;
+    return celdaEnPunto(obtenerPartida().celdas, p.x, p.y, render.celdaActiva());
   };
 
   function cancelarPendiente() {

@@ -15,6 +15,8 @@ import * as UI from "./ui.js";
 
 const estado = {
   niveles: [],
+  playzone: { ancho: 910, alto: 962 },
+  celda: { activa: { ancho: 44, alto: 30 }, solapada: { ancho: 58, alto: 52 } },
   nivel: null,
   partida: null,
   render: null,
@@ -39,7 +41,9 @@ async function iniciar() {
     const respuesta = await fetch(RUTAS.datos);
     if (!respuesta.ok) throw new Error(`HTTP ${respuesta.status}`);
     const datos = await respuesta.json();
-    estado.niveles = datos.niveles.map((nivel) => ({ ...nivel, hexagono: datos.hexagono }));
+    estado.niveles = datos.niveles;
+    estado.playzone = datos.playzone;
+    estado.celda = datos.celda;
   } catch (error) {
     UI.abrirPanel({
       titulo: "No se pudo cargar el juego",
@@ -54,6 +58,7 @@ async function iniciar() {
   render = crearRender(lienzo, caja, {
     alCambiarVista: () => { if (estado.partida) dibujar(); },
   });
+  render.configurar({ playzone: estado.playzone, celda: estado.celda });
   estado.render = render;
 
   conectarSonido();
@@ -149,10 +154,10 @@ function conectarBotones() {
 function alternarEncuadre() {
   if (!estado.partida) return;
   const v = render.vistaActual();
-  const enEncuadre = Math.abs(v.escala - v.ajusteBase) < 0.001;
+  const enEncuadre = Math.abs(v.escala - v.minimo) < 0.001;
   if (enEncuadre) {
     const ayuda = estado.partida.celdaAyuda !== null ? estado.partida.celdas[estado.partida.celdaAyuda] : null;
-    render.vistaComoda(ayuda);
+    render.vistaNormal(ayuda);
   } else {
     render.encuadrarTodo();
   }
@@ -202,7 +207,7 @@ async function empezarNivel(nivel, { minas = null, intentos = 1 } = {}) {
   requestAnimationFrame(() => {
     render.redimensionar();
     const ayuda = partida.celdaAyuda !== null ? partida.celdas[partida.celdaAyuda] : null;
-    render.vistaComoda(ayuda);
+    render.vistaNormal(ayuda);
     dibujar();
   });
 
@@ -465,7 +470,8 @@ window.animaminas = {
   posicion: (i) => render.posicionCelda(estado.partida.celdas[i]),
   vista: () => render.vistaActual(),
   dibujos: () => render.dibujos(),
-  medirReconstruccion: () => render.medirReconstruccion(estado.partida),
+  ventana: () => render.ventanaActual(),
+  celdaActiva: () => render.celdaActiva(),
 };
 
 iniciar();

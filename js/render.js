@@ -1,14 +1,13 @@
 /**
  * Dibujo del tablero en canvas.
  *
- * El fondo de cada nivel es un recorte de la plantilla; las fichas son imágenes
- * independientes que se colocan centradas en cada celda. Todo se dibuja con una
- * transformación de vista (escala + desplazamiento) para que quepa en cualquier
- * pantalla y se pueda ampliar.
+ * Modelo de vista: una **ventana** fija (*playzone*) sobre el tablero real. El tablero se
+ * dibuja a escala `Z` (1 = tamaño nativo de la celda, 58×52) dentro de la ventana, y se
+ * arrastra para recorrerlo. La ventana es como mucho el tamaño del playzone y nunca mayor
+ * que el lienzo disponible (opción C): en móvil manda la pantalla.
  *
- * Rendimiento: el tablero se pre-renderiza en un canvas fuera de pantalla a la escala
- * actual (fondo + fichas, ya escaladas). Cada frame es un único blit alineado a píxel;
- * al destapar o marcar una casilla solo se repinta esa casilla en la capa.
+ * Se dibuja directamente al canvas, recortando a la ventana. Los repintados solo ocurren
+ * cuando algo cambia (juego, arrastre o zoom), nunca en un bucle continuo.
  */
 
 import { CONFIG, RUTAS, FICHAS } from "./config.js";
@@ -16,16 +15,6 @@ import { ESTADO, MARCAS } from "./board.js";
 
 const NOMBRES_FICHAS = ["limpio", "marca", "seguro", "mina", "numero1", "numero2", "numero3",
   "numero4", "numero5", "numero6"];
-
-/**
- * Las fichas ocupan exactamente la celda: su lienzo (31×28) es la mitad del hexágono
- * de la plantilla (60×52), así que se dibujan a ese tamaño. El halo blanco y la
- * sombra que traen las imágenes son parte del diseño original.
- */
-const ESCALA_FICHA = 1.0;
-
-/** Por encima de esta superficie (px de dispositivo) no se cachea la capa del tablero. */
-const LIMITE_CAPA = 8_000_000;
 
 function cargarImagen(url) {
   return new Promise((resolver, rechazar) => {
@@ -40,27 +29,25 @@ export function crearRender(lienzo, caja, opciones = {}) {
   const ctx = lienzo.getContext("2d");
   const fichas = new Map();
   const fondos = new Map();
-  const cacheFichas = new Map();
-  const vista = { escala: 1, x: 0, y: 0 };
+  const vista = { escala: 1, x: 0, y: 0 };     // origen del tablero relativo a la ventana
   const estado = { anchoCss: 1, altoCss: 1, dpr: 1 };
+  const ventana = { x: 0, y: 0, ancho: 1, alto: 1 };
+  let playzone = { ancho: 910, alto: 962 };
+  let celdaActiva = { ancho: 44, alto: 30 };
+  let celdaSolapada = { ancho: 58, alto: 52 };
   let nivelActual = null;
   let fondoActual = null;
-  let ajusteBase = 1;
-  let pasoPlantilla = 44.81;
+  let encaje = 1;                 // escala a la que el tablero cabe entero en la ventana
   let cuadroPedido = 0;
   let contadorDibujos = 0;
   const alCambiarVista = opciones.alCambiarVista ?? null;
 
-  // capa pre-renderizada del tablero
-  let capa = null;
-  let capaEscala = 0;
-  let capaDpr = 0;
-  let capaNivel = null;
-  let capaPartida = null;
-  let firmas = null;
-  // mientras se hace zoom se dibuja directo y la capa se rehace al terminar
-  let zoomHasta = 0;
-  let temporizadorZoom = 0;
+  function configurar({ playzone: pz, celda } = {}) {
+    if (pz) playzone = { ancho: pz.ancho, alto: pz.alto };
+    if (celda?.activa) celdaActiva = { ancho: celda.activa.ancho, alto: celda.activa.alto };
+    if (celda?.solapada) celdaSolapada = { ancho: celda.solapada.ancho, alto: celda.solapada.alto };
+    calcularVentana();
+  }
 
   /** Pide un repintado para el siguiente frame (como mucho uno por frame). */
   function pedirDibujo() {
@@ -71,55 +58,98 @@ export function crearRender(lienzo, caja, opciones = {}) {
     });
   }
 
+  /** La ventana es el playzone, recortado al espacio disponible y centrado. */
+  function calcularVentana() {
+    const ancho = Math.max(1, Math.min(playzone.ancho, estado.anchoCss));
+    const alto = Math.max(1, Math.min(playzone.alto, estado.altoCss));
+    ventana.ancho = ancho;
+    ventana.alto = alto;
+    ventana.x = Math.round((estado.anchoCss - ancho) / 2);
+    ventana.y = Math.round((estado.altoCss - alto) / 2);
+  }
+
+  function escalaMinima() {
+    if (!nivelActual) return 1;
+    const ajuste = Math.min(ventana.ancho / nivelActual.ancho, ventana.alto / nivelActual.alto);
+    return Math.min(1, ajuste);
+  }
+
+  function escalaMaxima() {
+    return Math.max(escalaMinima(), CONFIG.zoomMaximo);
+  }
+
+  /** Encaja el tablero dentro de la ventana (lo que hace el botón ⤢). */
+  function encuadrarTodo() {
+    if (!nivelActual) return;
+    vista.escala = encaje;
+    vista.x = (ventana.ancho - nivelActual.ancho * vista.escala) / 2;
+    vista.y = (ventana.alto - nivelActual.alto * vista.escala) / 2;
+    limitarVista();
+  }
+
+  /** Vista normal: celda a tamaño nativo, centrada en una casilla. */
+  function vistaNormal(celda) {
+    if (!nivelActual) return;
+    vista.escala = 1;
+    const c = celda ?? { x: nivelActual.ancho / 2, y: nivelActual.alto / 2 };
+    vista.x = ventana.ancho / 2 - c.x;
+    vista.y = ventana.alto / 2 - c.y;
+    limitarVista();
+  }
+
+  function limitarVista() {
+    if (!nivelActual) return;
+    const w = nivelActual.ancho * vista.escala;
+    const h = nivelActual.alto * vista.escala;
+    if (w <= ventana.ancho) vista.x = (ventana.ancho - w) / 2;
+    else vista.x = Math.min(0, Math.max(ventana.ancho - w, vista.x));
+    if (h <= ventana.alto) vista.y = (ventana.alto - h) / 2;
+    else vista.y = Math.min(0, Math.max(ventana.alto - h, vista.y));
+  }
+
+  /** Desplaza la vista lo justo para que la casilla quede dentro (teclado). */
+  function asegurarVisible(celda) {
+    if (!celda || !nivelActual) return;
+    const margen = 48;
+    const sx = vista.x + celda.x * vista.escala;
+    const sy = vista.y + celda.y * vista.escala;
+    let cambio = false;
+    if (sx < margen) { vista.x += margen - sx; cambio = true; }
+    else if (sx > ventana.ancho - margen) { vista.x -= sx - (ventana.ancho - margen); cambio = true; }
+    if (sy < margen) { vista.y += margen - sy; cambio = true; }
+    else if (sy > ventana.alto - margen) { vista.y -= sy - (ventana.alto - margen); cambio = true; }
+    if (cambio) {
+      limitarVista();
+      pedirDibujo();
+    }
+  }
+
   function redimensionar() {
     const r = caja.getBoundingClientRect();
     const anterior = { ...estado };
-    // punto del tablero que está en el centro de la vista (para conservar el zoom)
-    let centro = null;
-    if (nivelActual && anterior.anchoCss > 1 && anterior.altoCss > 1) {
-      centro = {
-        x: (anterior.anchoCss / 2 - vista.x) / vista.escala,
-        y: (anterior.altoCss / 2 - vista.y) / vista.escala,
-        zoom: vista.escala / ajusteBase,
-      };
-    }
+    const teniaVista = Boolean(nivelActual && anterior.anchoCss > 1);
 
     estado.anchoCss = Math.max(1, Math.round(r.width));
     estado.altoCss = Math.max(1, Math.round(r.height));
     estado.dpr = Math.min(window.devicePixelRatio || 1, 2);
     lienzo.width = Math.round(estado.anchoCss * estado.dpr);
     lienzo.height = Math.round(estado.altoCss * estado.dpr);
-    ajustar();
+    calcularVentana();
 
-    // si el jugador había ampliado, mantiene su zoom relativo y el encuadre
-    if (centro && centro.zoom > 1.001) {
-      vista.escala = ajusteBase * centro.zoom;
-      vista.x = estado.anchoCss / 2 - centro.x * vista.escala;
-      vista.y = estado.altoCss / 2 - centro.y * vista.escala;
-      limitarVista();
+    if (!nivelActual) return;
+    if (teniaVista) {
+      // conserva la escala y el punto del tablero que había en el centro de la ventana
+      const centroX = (ventana.ancho / 2 - vista.x) / vista.escala;
+      const centroY = (ventana.alto / 2 - vista.y) / vista.escala;
+      encaje = Math.min(ventana.ancho / nivelActual.ancho, ventana.alto / nivelActual.alto);
+      vista.escala = Math.min(escalaMaxima(), Math.max(escalaMinima(), vista.escala));
+      vista.x = ventana.ancho / 2 - centroX * vista.escala;
+      vista.y = ventana.alto / 2 - centroY * vista.escala;
+    } else {
+      encaje = Math.min(ventana.ancho / nivelActual.ancho, ventana.alto / nivelActual.alto);
+      vistaNormal();
     }
-  }
-
-  /** Encuadra el tablero completo dentro de la caja visible. */
-  function ajustar() {
-    if (!nivelActual) return;
-    const { ancho, alto } = nivelActual.caja;
-    ajusteBase = Math.min(estado.anchoCss / ancho, estado.altoCss / alto) * 0.99;
-    vista.escala = ajusteBase;
-    vista.x = (estado.anchoCss - ancho * ajusteBase) / 2;
-    vista.y = (estado.altoCss - alto * ajusteBase) / 2;
     limitarVista();
-  }
-
-  function limitarVista() {
-    if (!nivelActual) return;
-    const { ancho, alto } = nivelActual.caja;
-    const w = ancho * vista.escala;
-    const h = alto * vista.escala;
-    if (w <= estado.anchoCss) vista.x = (estado.anchoCss - w) / 2;
-    else vista.x = Math.min(0, Math.max(estado.anchoCss - w, vista.x));
-    if (h <= estado.altoCss) vista.y = (estado.altoCss - h) / 2;
-    else vista.y = Math.min(0, Math.max(estado.altoCss - h, vista.y));
   }
 
   async function cargarFichas() {
@@ -132,85 +162,22 @@ export function crearRender(lienzo, caja, opciones = {}) {
 
   async function cargarNivel(nivel) {
     nivelActual = nivel;
-    if (!fondos.has(nivel.id)) {
-      fondos.set(nivel.id, await cargarImagen(RUTAS.fondo(nivel.id)));
-      // memoria: como mucho dos fondos descodificados a la vez
+    const ruta = nivel.fondo ?? RUTAS.fondo(nivel.id);
+    if (!fondos.has(ruta)) {
+      fondos.set(ruta, await cargarImagen(ruta));
       while (fondos.size > 2) {
         const primera = fondos.keys().next().value;
-        if (primera === nivel.id) break;
+        if (primera === ruta) break;
         fondos.delete(primera);
       }
     }
-    fondoActual = fondos.get(nivel.id);
-    // paso entre columnas de la plantilla (para hablar en "tamaño de celda en pantalla")
-    const primera = nivel.celdas.find((c) => c.col === 0) ?? nivel.celdas[0];
-    const segunda = nivel.celdas.find((c) => c.col === primera.col + 1 && c.fila === primera.fila);
-    if (segunda) pasoPlantilla = Math.abs(segunda.x - primera.x);
-    capa = null;
-    cacheFichas.clear();
-    ajustar();
+    fondoActual = fondos.get(ruta);
+    calcularVentana();
+    encaje = Math.min(ventana.ancho / nivel.ancho, ventana.alto / nivel.alto);
+    vistaNormal();
   }
 
-  /** Escala máxima de ampliación: no pasar de `pasoMaximo` px entre columnas. */
-  function escalaMaxima() {
-    return Math.max(ajusteBase, CONFIG.pasoMaximo / pasoPlantilla);
-  }
-
-  /**
-   * Vista "cómoda": celda de `pasoObjetivo` px, centrada en una casilla (por defecto el
-   * centro del tablero). Si el tablero cabe entero, se queda en el encuadre completo.
-   */
-  function vistaComoda(celda) {
-    if (!nivelActual) return;
-    const objetivo = Math.min(escalaMaxima(),
-      Math.max(ajusteBase, CONFIG.pasoObjetivo / pasoPlantilla));
-    vista.escala = objetivo;
-    const c = celda ?? { x: nivelActual.caja.ancho / 2, y: nivelActual.caja.alto / 2 };
-    vista.x = estado.anchoCss / 2 - c.x * objetivo;
-    vista.y = estado.altoCss / 2 - c.y * objetivo;
-    limitarVista();
-  }
-
-  function encuadrarTodo() {
-    ajustar();
-  }
-
-  /** Desplaza la vista lo justo para que la casilla quede dentro (teclado). */
-  function asegurarVisible(celda) {
-    if (!celda || !nivelActual) return;
-    const margen = 48;
-    const sx = vista.x + celda.x * vista.escala;
-    const sy = vista.y + celda.y * vista.escala;
-    let cambio = false;
-    if (sx < margen) { vista.x += margen - sx; cambio = true; }
-    else if (sx > estado.anchoCss - margen) { vista.x -= sx - (estado.anchoCss - margen); cambio = true; }
-    if (sy < margen) { vista.y += margen - sy; cambio = true; }
-    else if (sy > estado.altoCss - margen) { vista.y -= sy - (estado.altoCss - margen); cambio = true; }
-    if (cambio) {
-      limitarVista();
-      pedirDibujo();
-    }
-  }
-
-  /* --------------------------------------------------------------- capa/fichas */
-
-  /** Ficha preescalada al tamaño de celda actual (se cachea por tamaño). */
-  function fichaEscalada(nombre, ancho, alto) {
-    const claveCache = `${nombre}|${ancho}x${alto}`;
-    if (cacheFichas.has(claveCache)) return cacheFichas.get(claveCache);
-    const original = fichas.get(nombre);
-    if (!original) return null;
-    const lienzoFicha = document.createElement("canvas");
-    lienzoFicha.width = ancho;
-    lienzoFicha.height = alto;
-    const c = lienzoFicha.getContext("2d");
-    c.imageSmoothingQuality = "high";
-    c.drawImage(original, 0, 0, ancho, alto);
-    cacheFichas.set(claveCache, lienzoFicha);
-    return lienzoFicha;
-  }
-
-  const firmaCelda = (c) => c.estado * 4 + c.marca;
+  /* ------------------------------------------------------------------- dibujo */
 
   function nombreFicha(c) {
     if (c.estado === ESTADO.DESTAPADA) return c.num > 0 ? FICHAS.numero(c.num) : FICHAS.limpio;
@@ -220,81 +187,37 @@ export function crearRender(lienzo, caja, opciones = {}) {
     return null;
   }
 
-  /** Pinta la ficha de una celda en la capa, en píxeles de dispositivo. */
-  function pintarCelda(ctxCapa, celda, dpr) {
-    const nombre = nombreFicha(celda);
-    if (!nombre) return;
-    const hexa = nivelActual.hexagono;
-    const escala = capaEscala;
-    const X = Math.round((celda.x - hexa.ancho / 2) * escala * dpr);
-    const Y = Math.round((celda.y - hexa.alto / 2) * escala * dpr);
-    const W = Math.round(hexa.ancho * escala * dpr);
-    const H = Math.round(hexa.alto * escala * dpr);
-    const ficha = fichaEscalada(nombre, W, H);
-    if (ficha) ctxCapa.drawImage(ficha, X, Y);
-  }
+  function dibujar(partida, opcionesDibujo = {}) {
+    const { debug = false, resaltada = -1 } = opcionesDibujo;
+    contadorDibujos += 1;
 
-  function reconstruirCapa(partida) {
-    const dpr = estado.dpr;
-    const w = Math.round(nivelActual.caja.ancho * vista.escala * dpr);
-    const h = Math.round(nivelActual.caja.alto * vista.escala * dpr);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, lienzo.width, lienzo.height);
+    ctx.setTransform(estado.dpr, 0, 0, estado.dpr, 0, 0);
+    if (!nivelActual || !fondoActual) return;
 
-    if (w * h > LIMITE_CAPA) {
-      capa = null;
-      capaPartida = partida;
-      capaEscala = vista.escala;
-      capaDpr = dpr;
-      capaNivel = nivelActual;
-      return;
-    }
+    const escala = vista.escala;
+    const ox = ventana.x + vista.x;
+    const oy = ventana.y + vista.y;
+    const anchoTablero = nivelActual.ancho * escala;
+    const altoTablero = nivelActual.alto * escala;
 
-    const necesitabaTamano = !capa || capa.width !== w || capa.height !== h;
-    if (!capa) capa = document.createElement("canvas");
-    if (necesitabaTamano) {
-      capa.width = w;
-      capa.height = h;
-      firmas = null;
-    }
-    const ctxCapa = capa.getContext("2d");
-    ctxCapa.imageSmoothingQuality = "high";
-    ctxCapa.clearRect(0, 0, w, h);
-    ctxCapa.drawImage(fondoActual, 0, 0, fondoActual.width, fondoActual.height, 0, 0, w, h);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ventana.x, ventana.y, ventana.ancho, ventana.alto);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(fondoActual, ox, oy, anchoTablero, altoTablero);
 
-    capaEscala = vista.escala;
-    capaDpr = dpr;
-    capaNivel = nivelActual;
-    capaPartida = partida;
-    firmas = new Array(partida.celdas.length);
-
-    for (let i = 0; i < partida.celdas.length; i += 1) {
-      const c = partida.celdas[i];
-      pintarCelda(ctxCapa, c, dpr);
-      firmas[i] = firmaCelda(c);
-    }
-  }
-
-  /** ¿Ha cambiado alguna casilla desde que se pintó la capa? */
-  function hayCambios(partida) {
-    if (!firmas || firmas.length !== partida.celdas.length) return true;
-    for (let i = 0; i < partida.celdas.length; i += 1) {
-      if (firmaCelda(partida.celdas[i]) !== firmas[i]) return true;
-    }
-    return false;
-  }
-
-  function dibujarDirecto(partida) {
-    const { escala, x: ox, y: oy } = vista;
-    const hexa = nivelActual.hexagono;
-    ctx.drawImage(fondoActual, ox, oy,
-      nivelActual.caja.ancho * escala, nivelActual.caja.alto * escala);
-
-    const anchoFicha = hexa.ancho * escala * ESCALA_FICHA;
-    const altoFicha = hexa.alto * escala * ESCALA_FICHA;
+    const anchoFicha = celdaSolapada.ancho * escala;
+    const altoFicha = celdaSolapada.alto * escala;
     const margen = Math.max(anchoFicha, altoFicha);
     for (const c of partida.celdas) {
       const sx = ox + c.x * escala;
       const sy = oy + c.y * escala;
-      if (sx < -margen || sy < -margen || sx > estado.anchoCss + margen || sy > estado.altoCss + margen) {
+      if (sx < ventana.x - margen || sy < ventana.y - margen
+        || sx > ventana.x + ventana.ancho + margen || sy > ventana.y + ventana.alto + margen) {
         continue;
       }
       const nombre = nombreFicha(c);
@@ -303,58 +226,20 @@ export function crearRender(lienzo, caja, opciones = {}) {
       if (!img) continue;
       ctx.drawImage(img, sx - anchoFicha / 2, sy - altoFicha / 2, anchoFicha, altoFicha);
     }
-  }
-
-  function dibujar(partida, opciones = {}) {
-    const { debug = false, resaltada = -1 } = opciones;
-    contadorDibujos += 1;
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, lienzo.width, lienzo.height);
-    ctx.setTransform(estado.dpr, 0, 0, estado.dpr, 0, 0);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-
-    if (!nivelActual || !fondoActual) return;
-
-    const dpr = estado.dpr;
-    const { escala, x: ox, y: oy } = vista;
-    const escalaValida = capa && capaEscala === escala && capaDpr === dpr
-      && capaNivel === nivelActual && capaPartida === partida;
-    const enZoom = performance.now() < zoomHasta;
-
-    if (enZoom && !escalaValida) {
-      // durante un pellizco o giro de rueda: dibujo directo, sin rehacer la capa
-      dibujarDirecto(partida);
-    } else {
-      if (!escalaValida || hayCambios(partida)) {
-        reconstruirCapa(partida);
-      }
-      if (capa) {
-        // blit 1:1 alineado a píxel de dispositivo (sin remuestreo)
-        const anchoCss = capa.width / dpr;
-        const altoCss = capa.height / dpr;
-        const dx = Math.round(ox * dpr) / dpr;
-        const dy = Math.round(oy * dpr) / dpr;
-        ctx.drawImage(capa, dx, dy, anchoCss, altoCss);
-      } else {
-        dibujarDirecto(partida);
-      }
-    }
 
     if (resaltada >= 0 && partida.celdas[resaltada]) {
       const c = partida.celdas[resaltada];
       const cx = ox + c.x * escala;
       const cy = oy + c.y * escala;
-      const w2 = nivelActual.hexagono.ancho * escala;
-      const h2 = nivelActual.hexagono.alto * escala;
+      const w2 = anchoFicha / 2;
+      const h2 = altoFicha / 2;
       ctx.beginPath();
-      ctx.moveTo(cx + w2 / 2, cy);
-      ctx.lineTo(cx + w2 / 4, cy + h2 / 2);
-      ctx.lineTo(cx - w2 / 4, cy + h2 / 2);
-      ctx.lineTo(cx - w2 / 2, cy);
-      ctx.lineTo(cx - w2 / 4, cy - h2 / 2);
-      ctx.lineTo(cx + w2 / 4, cy - h2 / 2);
+      ctx.moveTo(cx + w2, cy);
+      ctx.lineTo(cx + w2 / 2, cy + h2);
+      ctx.lineTo(cx - w2 / 2, cy + h2);
+      ctx.lineTo(cx - w2, cy);
+      ctx.lineTo(cx - w2 / 2, cy - h2);
+      ctx.lineTo(cx + w2 / 2, cy - h2);
       ctx.closePath();
       ctx.strokeStyle = "rgba(242,183,5,0.95)";
       ctx.lineWidth = 3;
@@ -375,7 +260,15 @@ export function crearRender(lienzo, caja, opciones = {}) {
         ctx.stroke();
       }
     }
+    ctx.restore();
+
+    // marco de la ventana
+    ctx.strokeStyle = "rgba(120, 170, 200, 0.35)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ventana.x + 0.5, ventana.y + 0.5, ventana.ancho - 1, ventana.alto - 1);
   }
+
+  /* -------------------------------------------------------------- pulsación */
 
   /**
    * Factor real entre el búfer del canvas y su tamaño en CSS. Normalmente coincide con
@@ -389,37 +282,48 @@ export function crearRender(lienzo, caja, opciones = {}) {
     };
   }
 
-  /** Convierte coordenadas de pantalla a coordenadas de la imagen del nivel. */
+  /** Coordenadas de pantalla → coordenadas de la imagen del nivel. */
   function aImagen(clientX, clientY) {
     const r = lienzo.getBoundingClientRect();
     const f = factorBuffer(r);
-    const bx = ((clientX - r.left) * f.x) / estado.dpr;
-    const by = ((clientY - r.top) * f.y) / estado.dpr;
-    return { x: (bx - vista.x) / vista.escala, y: (by - vista.y) / vista.escala };
+    const cssX = ((clientX - r.left) * f.x) / estado.dpr;
+    const cssY = ((clientY - r.top) * f.y) / estado.dpr;
+    const dentro = cssX >= ventana.x && cssX <= ventana.x + ventana.ancho
+      && cssY >= ventana.y && cssY <= ventana.y + ventana.alto;
+    return {
+      x: (cssX - ventana.x - vista.x) / vista.escala,
+      y: (cssY - ventana.y - vista.y) / vista.escala,
+      fuera: !dentro,
+    };
   }
+
+  /** Coordenadas de pantalla (cliente) del centro de una celda. */
+  function posicionCelda(celda) {
+    const r = lienzo.getBoundingClientRect();
+    const f = factorBuffer(r);
+    const cssX = ventana.x + vista.x + celda.x * vista.escala;
+    const cssY = ventana.y + vista.y + celda.y * vista.escala;
+    return {
+      x: r.left + (cssX * estado.dpr) / f.x,
+      y: r.top + (cssY * estado.dpr) / f.y,
+    };
+  }
+
+  /* ------------------------------------------------------------- zoom y pan */
 
   function zoomEn(factor, clientX, clientY) {
     const r = lienzo.getBoundingClientRect();
-    const px = clientX - r.left;
-    const py = clientY - r.top;
-    const escalaMax = escalaMaxima();
-    const nueva = Math.min(escalaMax, Math.max(ajusteBase, vista.escala * factor));
+    const f = factorBuffer(r);
+    const px = ((clientX - r.left) * f.x) / estado.dpr - ventana.x;
+    const py = ((clientY - r.top) * f.y) / estado.dpr - ventana.y;
+    const nueva = Math.min(escalaMaxima(), Math.max(escalaMinima(), vista.escala * factor));
     if (nueva === vista.escala) return;
-    // mantener fijo el punto bajo el cursor
     const ix = (px - vista.x) / vista.escala;
     const iy = (py - vista.y) / vista.escala;
     vista.escala = nueva;
     vista.x = px - ix * nueva;
     vista.y = py - iy * nueva;
     limitarVista();
-
-    // mientras dura el gesto se dibuja directo; al parar se rehace la capa
-    zoomHasta = performance.now() + 220;
-    clearTimeout(temporizadorZoom);
-    temporizadorZoom = setTimeout(() => {
-      zoomHasta = 0;
-      pedirDibujo();
-    }, 240);
     pedirDibujo();
   }
 
@@ -434,32 +338,36 @@ export function crearRender(lienzo, caja, opciones = {}) {
   }
 
   function vistaActual() {
-    return { ...vista, ajusteBase, anchoCss: estado.anchoCss, altoCss: estado.altoCss };
-  }
-
-  /** Coordenadas de pantalla (cliente) del centro de una celda. */
-  function posicionCelda(celda) {
-    const r = lienzo.getBoundingClientRect();
-    const f = factorBuffer(r);
-    const bx = estado.dpr * (vista.x + celda.x * vista.escala);
-    const by = estado.dpr * (vista.y + celda.y * vista.escala);
-    return { x: r.left + bx / f.x, y: r.top + by / f.y };
-  }
-
-  function reiniciarVista() { ajustar(); }
-
-  /** Diagnóstico (pruebas): fuerza la reconstrucción de la capa y devuelve los ms. */
-  function medirReconstruccion(partida) {
-    zoomHasta = 0;
-    const t0 = performance.now();
-    reconstruirCapa(partida);
-    return performance.now() - t0;
+    return {
+      escala: vista.escala,
+      x: vista.x,
+      y: vista.y,
+      minimo: escalaMinima(),
+      maximo: escalaMaxima(),
+      encaje,
+      ventana: { ...ventana },
+      anchoCss: estado.anchoCss,
+      altoCss: estado.altoCss,
+    };
   }
 
   return {
-    cargarFichas, cargarNivel, dibujar, aImagen, zoomEn, desplazar,
-    vistaActual, redimensionar, ajustar, reiniciarVista, posicionCelda,
-    pedirDibujo, dibujos: () => contadorDibujos,
-    vistaComoda, encuadrarTodo, asegurarVisible, medirReconstruccion,
+    configurar,
+    cargarFichas,
+    cargarNivel,
+    dibujar,
+    aImagen,
+    posicionCelda,
+    zoomEn,
+    desplazar,
+    vistaActual,
+    redimensionar,
+    encuadrarTodo,
+    vistaNormal,
+    asegurarVisible,
+    pedirDibujo,
+    celdaActiva: () => ({ ...celdaActiva }),
+    ventanaActual: () => ({ ...ventana }),
+    dibujos: () => contadorDibujos,
   };
 }

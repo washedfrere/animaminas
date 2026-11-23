@@ -5,9 +5,9 @@
  * columnas contrapeadas verticalmente: la columna `c` empieza en
  * `y = origen.y + (c % 2) * desfase`, y las filas avanzan de `paso.y` en `paso.y`.
  *
- * Cada celda se identifica por (col, fila). Las distancias entre centros vecinos son
- * iguales en las seis direcciones, así que para saber qué casilla se ha pulsado basta
- * con buscar el centro más cercano.
+ * Cada celda se identifica por (col, fila). Los centros vienen de las máscaras del autor
+ * y el área de pulsación es el rectángulo activo de cada hexágono, que no se solapa con
+ * el de sus vecinos; fuera de él se usa el centro más cercano como respaldo.
  */
 
 export const clave = (col, fila) => `${col},${fila}`;
@@ -37,23 +37,36 @@ export function vecinasDe(mapa, col, fila) {
 }
 
 /**
- * Índice de la celda cuyo centro está más cerca del punto (x, y) en coordenadas de
- * la imagen de fondo del nivel. Devuelve -1 si el punto queda demasiado lejos.
+ * Índice de la celda pulsada.
+ *
+ * Primero se busca en el **área activa** (rectángulo centrado en cada hexágono, sin
+ * solapes). Si el punto no cae en ninguna, se devuelve el centro más cercano siempre que
+ * esté dentro de `distanciaMaxima`; si no, -1.
+ *
+ * @param {Array} celdas  celdas con `x` e `y` (centros, coordenadas de la imagen del nivel)
+ * @param {number} x
+ * @param {number} y
+ * @param {{ancho: number, alto: number}} activa  tamaño del área de pulsación
+ * @param {number} [distanciaMaxima=48]  px de margen para el respaldo del centro más cercano
  */
-export function celdaEnPunto(celdas, x, y, radioMaximo = 40) {
+export function celdaEnPunto(celdas, x, y, activa, distanciaMaxima = 48) {
+  const hw = (activa?.ancho ?? 44) / 2;
+  const hh = (activa?.alto ?? 30) / 2;
   let mejor = -1;
-  let mejorDist = radioMaximo * radioMaximo;
+  let mejorDist = Infinity;
+
   for (let i = 0; i < celdas.length; i += 1) {
     const c = celdas[i];
-    const dx = c.x - x;
-    const dy = c.y - y;
+    const dx = Math.abs(c.x - x);
+    const dy = Math.abs(c.y - y);
+    if (dx <= hw && dy <= hh) return i;
     const d2 = dx * dx + dy * dy;
     if (d2 < mejorDist) {
       mejorDist = d2;
       mejor = i;
     }
   }
-  return mejor;
+  return mejorDist <= distanciaMaxima * distanciaMaxima ? mejor : -1;
 }
 
 /** Caja que contiene todos los centros (útil para encuadrar el tablero). */

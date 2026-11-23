@@ -19,13 +19,8 @@ export const CONFIG = {
   penalizacionIntento: 100,
   penalizacionMarca: 25,
 
-  /** Escala mínima/máxima del tablero respecto al ajuste automático. */
-  zoomMin: 1,
-  zoomMax: 4,
-
-  /** Tamaño de celda en pantalla: paso de columna objetivo (px CSS) y máximo al ampliar. */
-  pasoObjetivo: 34,
-  pasoMaximo: 72,
+  /** Ampliación máxima del tablero dentro de la ventana (1 = celda nativa de 58×52). */
+  zoomMaximo: 2,
 };
 
 export const RUTAS = {
@@ -70,7 +65,7 @@ export const TEXTO = {
   ayuda: [
     "Un toque (o clic) sobre un hexágono oculto va cambiando su marca: nada → ! (seguro) → ? (duda) → nada.",
     "Dos toques seguidos destapan la casilla. Si tiene un seguro (!), el doble toque lo quita.",
-    "Si el tablero no cabe, arrástralo con un dedo; pellizca o pulsa ⤢ para verlo entero.",
+    "Arrastra con un dedo para mover la ventana; pellizca o usa la rueda para acercar, y ⤢ para ver el tablero entero.",
     "Una casilla con marca no se destapa: quita antes la marca.",
     "Al destapar una casilla sin bombas alrededor, se limpian las vecinas de golpe.",
     "Cuando pisas una bomba, las casillas de alrededor muestran cuántas bombas tienen al lado.",
